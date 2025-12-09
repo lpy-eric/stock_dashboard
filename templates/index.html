@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>按需計算版股市分析</title>
+    <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
+    <style>
+        body { font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #eef2f5; margin: 0; padding: 20px; height: 100vh; box-sizing: border-box; display: flex; flex-direction: column; }
+        .main-container { display: flex; gap: 20px; height: 100%; width: 100%; }
+        .chart-section { flex: 3; background: white; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); padding: 20px 20px 50px 20px; display: flex; flex-direction: column; position: relative; }
+        .sidebar { flex: 1; background: white; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); padding: 20px; display: flex; flex-direction: column; min-width: 280px; overflow-y: auto; }
+        .stock-header { display: flex; align-items: baseline; gap: 15px; margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid #f0f0f0; }
+        .stock-symbol { font-size: 2em; font-weight: bold; color: #333; }
+        .stock-price { font-size: 1.8em; font-weight: 600; color: #333; }
+        .stock-change { font-size: 1.2em; font-weight: 500; }
+        .up { color: #00B746; } .down { color: #EF403C; }
+        .input-group { display: flex; gap: 10px; margin-bottom: 15px; }
+        input[type="text"] { flex: 1; padding: 10px; border: 1px solid #ddd; border-radius: 6px; outline: none; }
+        button { padding: 10px 15px; background-color: #008FFB; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; }
+        button:hover { background-color: #0077D6; }
+        .category-title { font-size: 14px; font-weight: bold; color: #555; margin-top: 15px; margin-bottom: 8px; border-bottom: 2px solid #eee; padding-bottom: 3px; }
+        .tooltip-item { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; cursor: pointer; font-size: 14px; padding: 5px; border-radius: 5px; transition: background 0.2s; }
+        .tooltip-item:hover { background-color: #f0f4f8; }
+        .tooltip-item.loading { color: #999; } 
+        .tooltip-item.loading span::after { content: " (計算中...)"; font-size: 12px; }
+
+        #global-tooltip { position: fixed; visibility: hidden; background-color: #333; color: #fff; padding: 8px 12px; border-radius: 6px; font-size: 12px; z-index: 9999; pointer-events: none; white-space: nowrap; box-shadow: 0 4px 10px rgba(0,0,0,0.3); opacity: 0; transition: opacity 0.2s; transform: translateY(-50%); }
+        #global-tooltip::after { content: ""; position: absolute; top: 50%; right: 100%; margin-top: -5px; border-width: 5px; border-style: solid; border-color: transparent #333 transparent transparent; }
+        #chart { flex-grow: 1; min-height: 500px; }
+
+        /* Tooltip 樣式修正 (隱藏 K線標籤) */
+        .apexcharts-tooltip-series-group-0 .apexcharts-tooltip-marker { display: none !important; }
+        .apexcharts-tooltip-series-group-0 .apexcharts-tooltip-text-y-label { display: none !important; }
+        .apexcharts-tooltip-series-group-0 .apexcharts-tooltip-text-value { margin-left: 0 !important; padding-left: 0 !important; text-align: left; }
+        .apexcharts-tooltip-series-group-0 { justify-content: flex-start !important; text-align: left !important; }
+    </style>
+</head>
+<body>
+    <div id="global-tooltip"></div>
+    <div class="main-container">
+        <div class="chart-section">
+            <div id="infoBox" class="stock-header" style="visibility: hidden;">
+                <span id="stockName" class="stock-symbol">--</span>
+                <span id="stockPrice" class="stock-price">--</span>
+                <span id="stockChange" class="stock-change">--</span>
+            </div>
+            <div id="chart"></div>
+        </div>
+
+        <div class="sidebar">
+            <div class="input-group">
+                <input type="text" id="symbolInput" placeholder="代碼 (e.g. NVDA)" value="NVDA">
+                <button onclick="fetchStockData()">分析</button>
+            </div>
+            
+            <h3 style="margin: 0 0 10px 0;">技術指標</h3>
+
+            <div class="category-title">1. 趨勢跟蹤 (Trend)</div>
+            <label class="tooltip-item" data-tip="短期均線 (MA5, MA20)">
+                <input type="checkbox" id="chk_ma_short" onchange="toggleIndicator('chk_ma_short')"> <span>短期均線</span>
+            </label>
+            <label class="tooltip-item" data-tip="長期均線 (MA60/120/240)">
+                <input type="checkbox" id="chk_ma_long" checked onchange="toggleIndicator('chk_ma_long')"> <span>長期均線</span>
+            </label>
+            <label class="tooltip-item" data-tip="MACD (按需計算)">
+                <input type="checkbox" id="chk_macd" onchange="toggleIndicator('chk_macd')"> <span>MACD</span>
+            </label>
+            <label class="tooltip-item" data-tip="SAR (按需計算)">
+                <input type="checkbox" id="chk_sar" onchange="toggleIndicator('chk_sar')"> <span>SAR 拋物線</span>
+            </label>
+
+            <div class="category-title">2. 動量震蕩 (Momentum)</div>
+            <label class="tooltip-item" data-tip="RSI (按需計算)">
+                <input type="checkbox" id="chk_rsi" onchange="toggleIndicator('chk_rsi')"> <span>RSI</span>
+            </label>
+            <label class="tooltip-item" data-tip="KDJ (按需計算)">
+                <input type="checkbox" id="chk_kdj" onchange="toggleIndicator('chk_kdj')"> <span>KDJ</span>
+            </label>
+            <label class="tooltip-item" data-tip="CCI (按需計算)">
+                <input type="checkbox" id="chk_cci" onchange="toggleIndicator('chk_cci')"> <span>CCI</span>
+            </label>
+
+            <div class="category-title">3. 成交量 (Volume)</div>
+            <label class="tooltip-item" data-tip="實際成交量，紅綠柱狀圖顯示當日漲跌">
+                <input type="checkbox" id="chk_vol" onchange="toggleIndicator('chk_vol')"> <span>VOL 成交量</span>
+            </label>
+            <label class="tooltip-item" data-tip="OBV (按需計算)">
+                <input type="checkbox" id="chk_obv" onchange="toggleIndicator('chk_obv')"> <span>OBV</span>
+            </label>
+            <label class="tooltip-item" data-tip="VWAP (按需計算)">
+                <input type="checkbox" id="chk_vwap" onchange="toggleIndicator('chk_vwap')"> <span>VWAP</span>
+            </label>
+
+            <div class="category-title">4. 波動性 (Volatility)</div>
+            <label class="tooltip-item" data-tip="布林帶 (按需計算)">
+                <input type="checkbox" id="chk_boll" onchange="toggleIndicator('chk_boll')"> <span>布林帶</span>
+            </label>
+            <label class="tooltip-item" data-tip="ATR (按需計算)">
+                <input type="checkbox" id="chk_atr" onchange="toggleIndicator('chk_atr')"> <span>ATR</span>
+            </label>
+        </div>
+    </div>
+
+    <script>
+        let chart = null;
+        let currentData = { dates: [] }; 
+
+        const indicatorConfig = {
+            'chk_ma_short': { type: 'basic', keys: ['ma5', 'ma20'], names: ['MA5', 'MA20'] },
+            'chk_ma_long':  { type: 'basic', keys: ['ma60', 'ma120', 'ma240'], names: ['MA60', 'MA120', 'MA240'] },
+            // VOL 屬於 basic 類型
+            'chk_vol':      { type: 'basic', keys: ['volume'], names: ['成交量'] },
+            
+            'chk_macd': { type: 'macd', keys: ['macd_dif', 'macd_dea'], names: ['MACD_DIF', 'MACD_DEA'] },
+            'chk_sar':  { type: 'sar',  keys: ['sar'], names: ['SAR'] },
+            'chk_rsi':  { type: 'rsi',  keys: ['rsi'], names: ['RSI'] },
+            'chk_kdj':  { type: 'kdj',  keys: ['k', 'd', 'j'], names: ['K', 'D', 'J'] },
+            'chk_cci':  { type: 'cci',  keys: ['cci'], names: ['CCI'] },
+            'chk_obv':  { type: 'obv',  keys: ['obv'], names: ['OBV'] },
+            'chk_vwap': { type: 'vwap', keys: ['vwap'], names: ['VWAP'] },
+            'chk_boll': { type: 'boll', keys: ['boll_upper', 'boll_mid', 'boll_lower'], names: ['BOLL上軌', 'BOLL中軌', 'BOLL下軌'] },
+            'chk_atr':  { type: 'atr',  keys: ['atr'], names: ['ATR'] }
+        };
+
+        async function fetchStockData() {
+            const symbol = document.getElementById('symbolInput').value;
+            const btn = document.querySelector('button');
+
+            if(!symbol) return alert("請輸入代碼！");
+            
+            btn.innerText = "查詢中..."; btn.disabled = true;
+            
+            document.querySelectorAll('input[type="checkbox"]').forEach(el => {
+                if(el.id !== 'chk_ma_short' && el.id !== 'chk_ma_long') el.checked = false;
+            });
+            
+            document.getElementById('chk_ma_long').checked = true;
+            document.getElementById('chk_ma_short').checked = false;
+
+            try {
+                const response = await fetch(`/get_basic_data?symbol=${symbol}`);
+                const data = await response.json();
+                
+                if (response.status !== 200) { 
+                    alert(data.error); btn.innerText = "分析"; btn.disabled = false; return; 
+                }
+
+                document.getElementById('infoBox').style.visibility = 'visible';
+                document.getElementById('stockName').innerText = symbol.toUpperCase();
+                document.getElementById('stockPrice').innerText = `$${data.current_price}`;
+                const changeElem = document.getElementById('stockChange');
+                const isUp = data.change_percent >= 0;
+                changeElem.innerText = `${isUp ? '▲' : '▼'} ${data.change_percent}%`;
+                changeElem.className = `stock-change ${isUp ? 'up' : 'down'}`;
+
+                currentData = data; 
+                renderChart();
+
+                btn.innerText = "分析"; btn.disabled = false;
+
+            } catch (error) {
+                console.error(error);
+                alert("請求失敗");
+                btn.innerText = "分析"; btn.disabled = false;
+            }
+        }
+
+        async function toggleIndicator(id) {
+            const checkbox = document.getElementById(id);
+            const config = indicatorConfig[id];
+            
+            if (!checkbox.checked) {
+                updateChartVisibility();
+                return;
+            }
+
+            const firstKey = config.keys[0];
+            if (currentData[firstKey]) {
+                updateChartVisibility();
+                return;
+            }
+
+            const symbol = document.getElementById('symbolInput').value;
+            if (!symbol) return;
+
+            checkbox.disabled = true;
+            checkbox.parentElement.classList.add('loading');
+
+            try {
+                const response = await fetch(`/get_specific_indicator?symbol=${symbol}&type=${config.type}`);
+                const newData = await response.json();
+
+                if (response.status === 200) {
+                    const currentMin = chart.w.globals.minX;
+                    const currentMax = chart.w.globals.maxX;
+
+                    currentData = { ...currentData, ...newData };
+                    
+                    const series = getSeriesConfig(currentData);
+                    await chart.updateSeries(series);
+                    
+                    if (currentMin && currentMax) {
+                        chart.zoomX(currentMin, currentMax);
+                    }
+
+                    updateChartVisibility();
+                } else {
+                    alert('指標計算失敗');
+                    checkbox.checked = false;
+                }
+            } catch (e) {
+                console.error(e);
+                checkbox.checked = false;
+            } finally {
+                checkbox.disabled = false;
+                checkbox.parentElement.classList.remove('loading');
+            }
+        }
+
+        function z(arr) {
+            if (!arr || !currentData.dates) return [];
+            return currentData.dates.map((d, i) => ({ x: d, y: arr[i] }));
+        }
+
+        // --- 新增：處理成交量的數據轉換 (帶顏色) ---
+        function z_vol(volArr) {
+            if (!volArr || !currentData.candles) return [];
+            return currentData.dates.map((d, i) => {
+                // Candle 格式: [O, H, L, C]
+                const open = currentData.candles[i].y[0];
+                const close = currentData.candles[i].y[3];
+                // 漲(收>=開)為綠，跌為紅
+                const color = close >= open ? '#00B746' : '#EF403C';
+                return {
+                    x: d,
+                    y: volArr[i],
+                    fillColor: color,
+                    strokeColor: color
+                };
+            });
+        }
+
+        function getSeriesConfig(data) {
+            return [
+                { name: 'K線', type: 'candlestick', data: data.candles || [] }, // 0
+                
+                // --- 插入成交量 (Index 1) ---
+                { name: '成交量', type: 'bar', data: z_vol(data.volume) }, // 1
+                
+                { name: 'MA5', type: 'line', data: z(data.ma5) }, // 2
+                { name: 'MA20', type: 'line', data: z(data.ma20) }, // 3
+                { name: 'MA60', type: 'line', data: z(data.ma60) }, // 4
+                { name: 'MA120', type: 'line', data: z(data.ma120) }, // 5
+                { name: 'MA240', type: 'line', data: z(data.ma240) }, // 6
+                
+                { name: 'MACD_DIF', type: 'line', data: z(data.macd_dif) }, // 7
+                { name: 'MACD_DEA', type: 'line', data: z(data.macd_dea) }, // 8
+                { name: 'SAR', type: 'scatter', data: z(data.sar) }, // 9
+                
+                { name: 'RSI', type: 'line', data: z(data.rsi) }, // 10
+                { name: 'K', type: 'line', data: z(data.k) }, // 11
+                { name: 'D', type: 'line', data: z(data.d) }, // 12
+                { name: 'J', type: 'line', data: z(data.j) }, // 13
+                { name: 'CCI', type: 'line', data: z(data.cci) }, // 14
+                
+                { name: 'OBV', type: 'line', data: z(data.obv) }, // 15
+                { name: 'VWAP', type: 'line', data: z(data.vwap) }, // 16
+                
+                { name: 'BOLL上軌', type: 'line', data: z(data.boll_upper) }, // 17
+                { name: 'BOLL中軌', type: 'line', data: z(data.boll_mid) }, // 18
+                { name: 'BOLL下軌', type: 'line', data: z(data.boll_lower) }, // 19
+                { name: 'ATR', type: 'line', data: z(data.atr) } // 20
+            ];
+        }
+
+        function renderChart() {
+            if (chart) { chart.destroy(); }
+
+            const series = getSeriesConfig(currentData);
+            
+            let initialMin = undefined; let initialMax = undefined;
+            if (currentData.candles && currentData.candles.length > 0) {
+                const lastDate = new Date(currentData.candles[currentData.candles.length - 1].x);
+                initialMax = lastDate.getTime();
+                const startDate = new Date(lastDate);
+                startDate.setFullYear(lastDate.getFullYear() - 2);
+                initialMin = startDate.getTime();
+            }
+
+            const options = {
+                series: series,
+                chart: {
+                    type: 'line', height: '100%', fontFamily: 'Segoe UI, sans-serif',
+                    selection: { enabled: true, xaxis: { min: initialMin, max: initialMax } },
+                    animations: { enabled: false },
+                    toolbar: { offsetY: -30, tools: { download: true, selection: true, zoom: true, zoomin: true, zoomout: true, pan: true, reset: true } },
+                    events: {
+                        mounted: function(chartContext, config) { updateChartVisibility(); }
+                    }
+                },
+                tooltip: {
+                    enabled: true,
+                    shared: true,     
+                    intersect: false, 
+                    theme: 'light',
+                    x: { format: 'yyyy-MM-dd' },
+                    y: {
+                        formatter: function(value, { seriesIndex, dataPointIndex, w }) {
+                            // K線 (Series 0)
+                            if (seriesIndex === 0) {
+                                const o = w.globals.seriesCandleO[seriesIndex][dataPointIndex];
+                                const h = w.globals.seriesCandleH[seriesIndex][dataPointIndex];
+                                const l = w.globals.seriesCandleL[seriesIndex][dataPointIndex];
+                                const c = w.globals.seriesCandleC[seriesIndex][dataPointIndex];
+                                const color = c >= o ? '#00B746' : '#EF403C';
+                                return `
+                                    <div style="font-weight: bold; line-height: 1.5; text-align: left;">
+                                        <span style="color: #333;">開:</span> <span style="color: ${color};">${o}</span><br>
+                                        <span style="color: #333;">高:</span> <span style="color: ${color};">${h}</span><br>
+                                        <span style="color: #333;">低:</span> <span style="color: ${color};">${l}</span><br>
+                                        <span style="color: #333;">收:</span> <span style="color: ${color};">${c}</span>
+                                    </div>
+                                `;
+                            }
+                            
+                            // 成交量 (Series 1): 整數顯示
+                            if (seriesIndex === 1) {
+                                if (value === undefined || value === null) return '';
+                                return value.toFixed(0); 
+                            }
+
+                            if (value === undefined || value === null) return '';
+                            return value.toFixed(2);
+                        }
+                    }
+                },
+                markers: {
+                    // Index 0 (K線)=0, Index 1 (Vol)=0, Index 10 (SAR)=3
+                    size: [0, 0, 0,0, 0,0,0, 0,0, 3, 0, 0,0,0, 0, 0, 0, 0,0,0, 0],
+                    hover: { size: 5, sizeOffset: 3 }
+                },
+                grid: { padding: { bottom: 20, left: 10, right: 10 } },
+                stroke: { 
+                    // VOL (Index 1) 寬度設為 0 或 1，K線 (Index 0) 寬度 1，其他線 1
+                    width: [1, 1, 1,1, 1,1,1, 1,1, 0, 1, 1,1,1, 1, 1, 1, 1,1,1, 1], 
+                    curve: 'smooth' 
+                },
+                colors: [
+                    '#2E93fA', // K線 (由 plotOptions 覆蓋)
+                    '#00B746', // VOL (由 z_vol 函數動態覆蓋)
+                    '#FFA500', '#FF4560', // MA5, MA20
+                    '#775DD0', '#00E396', '#FEB019', // MA60, 120, 240
+                    '#008FFB', '#FF4560', // MACD
+                    '#000000', // SAR
+                    '#546E7A', // RSI
+                    '#E91E63', '#9C27B0', '#673AB7', // K, D, J
+                    '#FF9800', // CCI
+                    '#00BCD4', // OBV
+                    '#FFC107', // VWAP
+                    '#9E9E9E', '#9E9E9E', '#9E9E9E', // BOLL
+                    '#795548'  // ATR
+                ],
+                xaxis: { 
+                    type: 'datetime', 
+                    tooltip: { enabled: true },
+                    crosshairs: { show: true, width: 1, position: 'back', opacity: 0.9, stroke: { color: '#b6b6b6', width: 1, dashArray: 3 } },
+                },
+                yaxis: [
+                    // --- 0. K線 ---
+                    { seriesName: 'K線', labels: { formatter: (val) => "$" + val.toFixed(0) }, title: { text: "股價" }, opposite: true },
+                    
+                    // --- 1. 成交量 (獨立軸，置底) ---
+                    { 
+                        seriesName: '成交量', 
+                        opposite: true, // 放在右邊
+                        show: false, // 不顯示軸標籤 (保持畫面乾淨)
+                        // 技巧：設定 Max 為實際最大值的 4 倍，讓 Bar 只佔底部 25%
+                        max: function(max) { return max * 4; } 
+                    },
+
+                    // 2-6. MA
+                    { seriesName: 'K線', show: false }, { seriesName: 'K線', show: false }, 
+                    { seriesName: 'K線', show: false }, { seriesName: 'K線', show: false }, { seriesName: 'K線', show: false },
+                    
+                    // 7-8. MACD
+                    { seriesName: 'MACD', opposite: false, title: { text: "指標數值" }, labels: { formatter: (val) => val.toFixed(2) } }, 
+                    { seriesName: 'MACD', show: false }, 
+                    
+                    // 9. SAR
+                    { seriesName: 'K線', show: false }, 
+                    
+                    // 10-14. RSI, KDJ, CCI
+                    { seriesName: 'MACD', show: false }, { seriesName: 'MACD', show: false }, { seriesName: 'MACD', show: false }, { seriesName: 'MACD', show: false }, 
+                    { seriesName: 'MACD', show: false }, 
+                    
+                    // 15. OBV
+                    { seriesName: 'MACD', show: false }, 
+                    
+                    // 16. VWAP
+                    { seriesName: 'K線', show: false }, 
+                    
+                    // 17-19. BOLL
+                    { seriesName: 'K線', show: false }, { seriesName: 'K線', show: false }, { seriesName: 'K線', show: false }, 
+                    
+                    // 20. ATR
+                    { seriesName: 'MACD', show: false }, 
+                ],
+                plotOptions: { candlestick: { colors: { upward: '#00B746', downward: '#EF403C' } } },
+                legend: { show: false }
+            };
+
+            chart = new ApexCharts(document.querySelector("#chart"), options);
+            chart.render();
+            updateChartVisibility();
+        }
+
+        function updateChartVisibility() {
+            if (!chart) return;
+            for (const [id, config] of Object.entries(indicatorConfig)) {
+                const checked = document.getElementById(id).checked;
+                const names = config.names;
+                names.forEach(name => {
+                    checked ? chart.showSeries(name) : chart.hideSeries(name);
+                });
+            }
+        }
+
+        const tooltip = document.getElementById('global-tooltip');
+        document.querySelectorAll('.tooltip-item').forEach(item => {
+            item.addEventListener('mouseenter', function() {
+                const tipText = this.getAttribute('data-tip');
+                if (tipText) { tooltip.innerText = tipText; tooltip.style.visibility = 'visible'; tooltip.style.opacity = '1'; }
+            });
+            item.addEventListener('mousemove', function(e) {
+                tooltip.style.top = e.clientY + 'px'; tooltip.style.left = (e.clientX + 15) + 'px';
+            });
+            item.addEventListener('mouseleave', function() { tooltip.style.visibility = 'hidden'; tooltip.style.opacity = '0'; });
+        });
+    </script>
+</body>
+</html>
